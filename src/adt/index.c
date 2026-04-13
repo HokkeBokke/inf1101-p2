@@ -17,10 +17,18 @@
 #include "list.h"
 #include "map.h"
 #include "set.h"
+#include "ast.h"
 
+/*
+
+    hashmap:
+    term1: (doc1, doc2, ...)
+
+*/
 
 struct index {
-    /* TODO */
+    map_t* terms;
+    size_t number_of_documents_indexed;
 };
 
 /**
@@ -76,6 +84,8 @@ index_t *index_create() {
     /**
      * TODO: Allocate, initialize and set up nescessary structures
      */
+    index->terms = map_create((cmp_fn) strcmp, hash_string_fnv1a64);
+    index->number_of_documents_indexed = 0;
 
     return index;
 }
@@ -96,7 +106,36 @@ int index_document(index_t *index, char *doc_name, list_t *terms) {
      * Note: doc_name and the list of terms is now owned by the index. See the docstring.
      */
 
-    return 0; // or -x on error
+    // TODO: Check if document has been documented previously
+    
+    
+    list_iter_t* term_iter = list_createiter(terms);
+    if (term_iter == NULL)
+        return -1;
+    
+    index->number_of_documents_indexed++;
+    char* term;
+    while ((term = list_next(term_iter))) {
+        entry_t* entry = map_get(index->terms, term);
+        set_t* appearance_set = NULL;
+        if (entry == NULL) {
+            appearance_set = set_create((cmp_fn) strcmp);
+            if (appearance_set == NULL) {
+                list_destroyiter(term_iter);
+                return -1;
+            }
+            
+            set_insert(appearance_set, doc_name);
+            map_insert(index->terms, term, appearance_set);
+            continue;
+        }
+        // If term is already in the map:
+        appearance_set = entry->val;
+        set_insert(appearance_set, doc_name);
+    }
+    list_destroyiter(term_iter);
+
+    return 0;
 }
 
 list_t *index_query(index_t *index, list_t *query_tokens, char *errmsg) {
@@ -112,6 +151,28 @@ list_t *index_query(index_t *index, list_t *query_tokens, char *errmsg) {
      * the buffer.
      */
 
+    ast_t* ast = ast_create();
+    ast_parse(ast, query_tokens);
+
+    tree_iterator_t* tree_iter = ast_createiter(ast);
+    if (tree_iter == NULL) {
+        pr_error("Could not allocate memory for tree iterator\n");
+        return NULL;
+    }
+    // Fetch results from map
+    set_t* doc_appearances = NULL;
+    if (doc_appearances == NULL) {
+        pr_error("Could not allocate memory for set\n");
+        return NULL;
+    }
+    
+
+
+    // Construct a list of `query_result_t` objects
+
+    // Clean up
+
+
     return NULL; // TODO: return list of query_result_t objects instead
 }
 
@@ -119,6 +180,6 @@ void index_stat(index_t *index, size_t *n_docs, size_t *n_terms) {
     /**
      * TODO: fix this
      */
-    *n_docs = 0;
-    *n_terms = 0;
+    *n_docs = index->number_of_documents_indexed;
+    *n_terms = map_length(index->terms);
 }

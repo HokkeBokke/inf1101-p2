@@ -20,11 +20,12 @@ EXEC_NAME = indexer
 ADT_MAP = hashmap.c
 ADT_LIST = doublylinkedlist.c
 ADT_SET = rbtreeset.c
+ADT_AST = ast.c
 ADT_INDEX = index.c
 
 # If you define other headers within adt (e.g. stack, heap), 
 # declare the source file for it above and include in the following:
-ADT_SRC = $(ADT_MAP) $(ADT_LIST) $(ADT_SET) $(ADT_INDEX)
+ADT_SRC = $(ADT_MAP) $(ADT_LIST) $(ADT_SET) $(ADT_AST) $(ADT_INDEX)
 
 
 # ======================
