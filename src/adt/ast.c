@@ -159,14 +159,12 @@ node_t* parse_term(list_iter_t* iter, char* errmsg) {
     if (!left) {
         snprintf(errmsg, LINE_MAX, "Term cannot be empty");
         failure = 1;
-    }
-    if (!op) {
+    } else if (!op) {
         snprintf(errmsg, LINE_MAX, 
             "Expected operator after %s", (char*)left->item
         );
         failure = 1;
-    }
-    if (!right) {
+    } else if (!right) {
         snprintf(errmsg, LINE_MAX, 
             "Expected term after %s", nodetype_to_str(op)
         );

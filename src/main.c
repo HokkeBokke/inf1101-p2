@@ -718,13 +718,9 @@ int main(int argc, char **argv) {
         /* continue to cleanup */
     }
 
-    if (idx) {
-        pr_debug("Destroying index\n");
-        index_destroy(idx);
-    } else {
-        /* if there is an index, this list will have been destroyed by it */
-        list_destroy(fpaths, free);
-    }
+    pr_debug("Destroying index\n");
+    index_destroy(idx);
+    list_destroy(fpaths, free);
 
     list_destroy(piped_input, free); // empty list if interpreting went ok
     logger_destroy(result_logger);
