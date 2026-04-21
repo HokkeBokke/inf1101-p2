@@ -10,14 +10,26 @@
 
 #include <stddef.h>
 
-typedef struct ast ast_t;
-
 typedef enum node_type {
+    INVALID,
     ANDNOT,
     AND,
     OR,
-    TERM
+    WORD
 } nodetype_t;
+
+typedef struct node node_t;
+struct node {
+    void* item;
+    nodetype_t type;
+    node_t* parent;
+    node_t* left;
+    node_t* right;
+};
+
+typedef struct ast {
+    node_t* root;
+} ast_t;
 
 /**
  * @brief Creates a new, empty AST
@@ -30,10 +42,10 @@ ast_t* ast_create();
  * @param ast: pointer to an empty ast
  * @param query_tokens: pointer to list containing a query
  */
-void ast_parse(ast_t* ast, list_t* query_tokens);
+uint8_t ast_parse(ast_t* ast, list_t* query_tokens, char* errmsg);
 
 /**
- * @brief Destroy am AST
+ * @brief Destroy an AST
  * @param ast: pointer to the AST to be destroyed
  */
 void ast_destroy(ast_t* ast);
@@ -53,6 +65,12 @@ uint8_t is_operator(void* value);
  * @returns pointer to the newly allocated tree iterator
  */
 tree_iterator_t* ast_createiter(ast_t* ast);
+
+/**
+ * @brief Deallocates resources from a `tree_iterator_t`
+ * @param iter: pointer to iteratar to be destroyed
+ */
+void ast_destroyiter(tree_iterator_t* iter);
 
 /**
  * @brief checks if iterator has more items iterate

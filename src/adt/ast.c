@@ -14,25 +14,7 @@
 
 #include <stdlib.h>
 #include <string.h>
-
-typedef struct node node_t;
-struct node {
-    void* item;
-    nodetype_t type;
-    node_t* parent;
-    node_t* left;
-    node_t* right;
-};
-
-struct ast {
-    node_t* root;
-};
-
-// Declare parse functions
-node_t* parse_query(list_t* query_tokens);
-node_t* parse_andterm(list_t* query_tokens);
-node_t* parse_orterm(list_t* query_tokens);
-node_t* parse_term(list_t* query_tokens);
+#include <limits.h>
 
 node_t* create_tree_node(void* item, nodetype_t nodetype) {
     node_t* node = malloc(sizeof(node_t));
@@ -50,7 +32,7 @@ node_t* create_tree_node(void* item, nodetype_t nodetype) {
     return node;
 }
 
-ast_t* ast_create(list_t* query_tokens) {
+ast_t* ast_create() {
     ast_t* ast = malloc(sizeof(ast_t));
     if (ast == NULL) {
         pr_error("Could not allocate memory to ast\n");
@@ -62,164 +44,147 @@ ast_t* ast_create(list_t* query_tokens) {
     return ast;
 }
 
-void ast_parse(ast_t* ast, list_t* query_tokens) {
-    node_t* root = parse_query(query_tokens);
+void rec_destroy_node(node_t* node) {
+    if (node == NULL)
+        return;
+
+    rec_destroy_node(node->left);
+    rec_destroy_node(node->right);
+    free(node);
+}
+
+void ast_destroy(ast_t* ast) {
+    if (ast == NULL) 
+        return;
+    
+    // Delete all nodes
+    rec_destroy_node(ast->root);
+
+    free(ast);
+    ast = NULL;
+}
+
+// Declare parse functions
+node_t* parse_term(list_iter_t* iter, char* errmsg);
+
+uint8_t ast_parse(ast_t* ast, list_t* query_tokens, char* errmsg) {
+    if (list_length(query_tokens) == 1) {
+        char* word = list_popfirst(query_tokens);
+        if (is_operator(word)) {
+            pr_error("Not a valid query\n");
+            snprintf(errmsg, LINE_MAX, "Expected word to search for");
+            return 0;
+        }
+        node_t* top = create_tree_node(word, WORD);
+        ast->root = top;
+        return 1;
+    }
+
+    list_iter_t* iterator = list_createiter(query_tokens);
+    node_t* root = parse_term(iterator, errmsg);
+    list_destroyiter(iterator);
+    if (root == NULL) {
+        return 0;
+    }
     ast->root = root;
+    return 1;
 }
 
-/**
- * @brief Splits a list into two at the first occurance of a delimiter
- * 
- * @returns 0, or a negative integer if an error occured
- */
-int split_list_with_delimit(
-    list_t* original_list, 
-    char* delimit, 
-    list_t* lhs_list, 
-    list_t* rhs_list
-) {
-    // Try creating lists if they are not already created
-    if (lhs_list == NULL) {
-        lhs_list = list_create((cmp_fn) strcmp);
-        if (lhs_list == NULL) {
-            pr_error("Could not create list\n");
-            return -1;
-        }
-    }
-    if (rhs_list == NULL) {
-        rhs_list = list_create((cmp_fn) strcmp);
-        if (rhs_list == NULL) {
-            pr_error("Could not create lists\n");
-            return -1;
-        }
-    }
+nodetype_t str_to_nodetype(char* str) {
+    if (strcmp(str, "&!") == 0) return ANDNOT;
+    else if (strcmp(str, "&&") == 0) return AND;
+    else if (strcmp(str, "||") == 0) return OR;
+    
+    return WORD;
+}
 
-    list_iter_t* iter = list_createiter(original_list);
-    if (iter == NULL) {
-        pr_error("Could not create iterator\n");
-        return -2;
+char* nodetype_to_str(nodetype_t op) {
+    switch (op)
+    {
+    case ANDNOT:
+        return "&!";
+    case AND:
+        return "&&";
+    case OR:
+        return "||";
+    default:
+        return "";
     }
+}
 
-    int lhs_done = 0;
-    // Create seperate lists for left hand side and right hand side
-    char* term = NULL;
-    while ((term = list_next(iter))) {
-        if (lhs_done) {
-            list_addlast(rhs_list, term);
+node_t* parse_term(list_iter_t* iter, char* errmsg) {
+    node_t* left = NULL;
+    nodetype_t op = INVALID;
+    node_t* right = NULL;
+    char* cur = NULL;
+    while ((cur = list_next(iter))) {
+        if (strcmp(cur, ")") == 0) 
+            break;
+        if (is_operator(cur)) {
+            if (op) {
+                snprintf(errmsg, LINE_MAX, "Too many operators in term");
+                break;
+            }
+            if (!left) {
+                snprintf(errmsg, LINE_MAX, "Expected term before %s", cur);
+                break;
+            }
+            if (left && right) {
+                snprintf(errmsg, LINE_MAX, "Expected operator between terms");
+                break;
+            }
+            op = str_to_nodetype(cur);
             continue;
         }
-        if (strcmp(term, delimit) == 0) {
-            lhs_done = 1;
+        if (!left) {
+            if (strcmp(cur, "(") == 0) {
+                left = parse_term(iter, errmsg);
+                if (left == NULL) break;
+            } else {
+                left = create_tree_node(cur, WORD);
+            }
             continue;
         }
-        
-        list_addlast(lhs_list, term);
-    }
-
-    // Clean up
-    list_destroyiter(iter);
-
-    return 0;
-}
-
-node_t* parse_term(list_t* query_tokens) {
-    if (list_contains(query_tokens, "(") && list_contains(query_tokens, ")")) {
-        node_t* query_root = parse_query(query_tokens);
-        return query_root;
-    }
-
-    list_iter_t* iter = list_createiter(query_tokens);
-    char* term = NULL;
-    while ((term = list_next(iter))) {
-        if (strcmp(term, "(") == 0 || strcmp(term, ")") == 0) {
+        if (!right) {
+            if (strcmp(cur, "(") == 0) {
+                right = parse_term(iter, errmsg);
+                if (right == NULL) break;
+            } else {
+                right = create_tree_node(cur, WORD);
+            }
             continue;
         }
-
-        list_destroyiter(iter);
-        node_t* node = create_tree_node(term, TERM);
-        return node;
     }
-
-    list_destroyiter(iter);
-    return NULL;
-}
-
-node_t* parse_orterm(list_t* query_tokens) {
-    if (!list_contains(query_tokens, "||")) {
-        node_t* term_root = parse_term(query_tokens);
-        return term_root;
+    uint8_t failure = 0;
+    if (!left) {
+        snprintf(errmsg, LINE_MAX, "Term cannot be empty");
+        failure = 1;
     }
-
-    list_t* left = list_create((cmp_fn) strcmp);
-    list_t* right = list_create((cmp_fn) strcmp);
-    split_list_with_delimit(query_tokens, "||", left, right);
-
-    node_t* root = create_tree_node(NULL, OR);
-    node_t* left_branch = parse_term(left);
-    left_branch->parent = root;
-    node_t* right_branch = parse_orterm(right);
-    right_branch->parent = root;
-
-    root->left = left_branch;
-    root->right = right_branch;
-
-    // Clean up
-    list_destroy(left, NULL);
-    list_destroy(right, NULL);
-
-    return root;
-}
-
-node_t* parse_andterm(list_t* query_tokens) {
-    if (!list_contains(query_tokens, "&&")) {
-        node_t* andterm_root = parse_orterm(query_tokens);
-        return andterm_root;
+    if (!op) {
+        snprintf(errmsg, LINE_MAX, 
+            "Expected operator after %s", (char*)left->item
+        );
+        failure = 1;
     }
-
-    list_t* left = list_create((cmp_fn) strcmp);
-    list_t* right = list_create((cmp_fn) strcmp);
-    split_list_with_delimit(query_tokens, "&&", left, right);
-
-    node_t* root = create_tree_node(NULL, AND);
-    node_t* left_branch = parse_orterm(left);
-    left_branch->parent = root;
-    node_t* right_branch = parse_andterm(right);
-    right_branch->parent = root;
-
-    root->left = left_branch;
-    root->right = right_branch;
-
-    // Clean up
-    list_destroy(left, NULL);
-    list_destroy(right, NULL);
-
-    return root;
-}
-
-node_t* parse_query(list_t* query_tokens) {
-    if (!list_contains(query_tokens, "&!")) {
-        node_t* term_root = parse_andterm(query_tokens);
-        return term_root;
+    if (!right) {
+        snprintf(errmsg, LINE_MAX, 
+            "Expected term after %s", nodetype_to_str(op)
+        );
+        failure = 1;
     }
+    if (failure) {
+        free(left);
+        free(right);
+        return NULL;
+    }
+    
+    node_t* parent = create_tree_node(NULL, op);
+    parent->left = left;
+    left->parent = parent;
+    parent->right = right;
+    right->parent = parent;
 
-    list_t* left = list_create((cmp_fn) strcmp);
-    list_t* right = list_create((cmp_fn) strcmp);
-    split_list_with_delimit(query_tokens, "&!", left, right);
-
-    node_t* root = create_tree_node(NULL, ANDNOT);
-    node_t* left_branch = parse_andterm(left);
-    left_branch->parent = root;
-    node_t* right_branch = parse_query(right);
-    right_branch->parent = root;
-
-    root->left = left_branch;
-    root->right = right_branch;
-
-    // Clean up
-    list_destroy(left, NULL);
-    list_destroy(right, NULL);
-
-    return root;
+    return parent;
 }
 
 /* TREE ITERATOR */
@@ -261,6 +226,14 @@ tree_iterator_t* ast_createiter(ast_t* ast) {
     return iter;
 }
 
+void ast_destroyiter(tree_iterator_t* iter) {
+    if (iter == NULL) return;
+
+    list_destroy(iter->stack, NULL);
+    free(iter);
+    iter = NULL;
+}
+
 uint8_t ast_hasnext(tree_iterator_t* iter) {
     return list_length(iter->stack) != 0;
 }
@@ -289,7 +262,7 @@ void print_tree_recursive(const node_t *node, const char *prefix, int is_last) {
     printf("%s", is_last ? "└── " : "├── ");
     switch (node->type)
     {
-    case TERM:
+    case WORD:
         printf("%s\n", (char*)node->item);
         break;
     case ANDNOT:
@@ -330,7 +303,7 @@ void print_tree(const ast_t* ast) {
 
     switch (ast->root->type)
     {
-    case TERM:
+    case WORD:
         printf("%s\n", (char*)ast->root->item);
         break;
     case ANDNOT:

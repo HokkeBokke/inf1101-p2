@@ -19,13 +19,6 @@
 #include "set.h"
 #include "ast.h"
 
-/*
-
-    hashmap:
-    term1: (doc1, doc2, ...)
-
-*/
-
 struct index {
     map_t* terms;
     size_t number_of_documents_indexed;
@@ -90,13 +83,17 @@ index_t *index_create() {
     return index;
 }
 
+void free_mapset(void* set) {
+    set_destroy(set, NULL);
+}
+
 void index_destroy(index_t *index) {
     // during development, you can use the following macro to silence "unused variable" errors.
     UNUSED(index);
 
-    /**
-     * TODO: Free all memory associated with the index
-     */
+    map_destroy(index->terms, free, free_mapset);
+    free(index);
+    index = NULL;
 }
 
 int index_document(index_t *index, char *doc_name, list_t *terms) {
@@ -126,7 +123,9 @@ int index_document(index_t *index, char *doc_name, list_t *terms) {
             }
             
             set_insert(appearance_set, doc_name);
-            map_insert(index->terms, term, appearance_set);
+            char* term_cpy = malloc(strlen(term)+1);
+            strcpy(term_cpy, term);
+            map_insert(index->terms, term_cpy, appearance_set);
             continue;
         }
         // If term is already in the map:
@@ -134,8 +133,47 @@ int index_document(index_t *index, char *doc_name, list_t *terms) {
         set_insert(appearance_set, doc_name);
     }
     list_destroyiter(term_iter);
+    list_destroy(terms, free);
 
     return 0;
+}
+
+set_t* evaluate(index_t* index, node_t* node) {
+    if (node->type == INVALID) {
+        pr_error("Node type is invalid\n");
+        return NULL;
+    }
+    if (node->type == WORD) {
+        char* word = node->item;
+        entry_t* entry = map_get(index->terms, word);
+        if (entry == NULL) {
+            pr_debug("created empty set\n");
+            set_t* empty_set = set_create((cmp_fn) strcmp);
+            return empty_set;
+        }
+        // copy set
+        set_t* evaluated_set = set_union(entry->val, entry->val); 
+        pr_debug("set length: %zu\n", set_length(evaluated_set));
+        return evaluated_set;
+    }
+    set_t* lhs = evaluate(index, node->left);
+    set_t* rhs = evaluate(index, node->right);
+    set_t* evaluated_set = NULL;
+    switch(node->type) {
+        case AND:
+            evaluated_set = set_intersection(lhs, rhs);
+            break;
+        case OR:
+            evaluated_set = set_union(lhs, rhs);
+            break;
+        case ANDNOT:
+            evaluated_set = set_difference(lhs, rhs);
+            break;
+        default:
+    }
+    set_destroy(lhs, NULL);
+    set_destroy(rhs, NULL);
+    return evaluated_set;
 }
 
 list_t *index_query(index_t *index, list_t *query_tokens, char *errmsg) {
@@ -152,34 +190,35 @@ list_t *index_query(index_t *index, list_t *query_tokens, char *errmsg) {
      */
 
     ast_t* ast = ast_create();
-    ast_parse(ast, query_tokens);
+    if (!ast_parse(ast, query_tokens, errmsg)) {
+        ast_destroy(ast);
+        return NULL;
+    }
 
-    tree_iterator_t* tree_iter = ast_createiter(ast);
-    if (tree_iter == NULL) {
-        pr_error("Could not allocate memory for tree iterator\n");
-        return NULL;
-    }
     // Fetch results from map
-    set_t* doc_appearances = NULL;
-    if (doc_appearances == NULL) {
-        pr_error("Could not allocate memory for set\n");
-        return NULL;
-    }
-    
+    set_t* evaluated_set = evaluate(index, ast->root);
 
 
     // Construct a list of `query_result_t` objects
+    list_t* results = list_create((cmp_fn) strcmp);
+    set_iter_t* set_iter = set_createiter(evaluated_set);
+    char* cur_doc = NULL;
+    while ((cur_doc = set_next(set_iter))) {
+        query_result_t* result = malloc(sizeof(query_result_t));
+        result->doc_name = cur_doc;
+        result->score = 0;
+        list_addlast(results, result);
+    }
 
     // Clean up
+    set_destroyiter(set_iter);
+    set_destroy(evaluated_set, NULL);
+    ast_destroy(ast);
 
-
-    return NULL; // TODO: return list of query_result_t objects instead
+    return results;
 }
 
 void index_stat(index_t *index, size_t *n_docs, size_t *n_terms) {
-    /**
-     * TODO: fix this
-     */
     *n_docs = index->number_of_documents_indexed;
     *n_terms = map_length(index->terms);
 }
