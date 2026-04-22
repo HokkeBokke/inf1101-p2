@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 #include <limits.h> // for LINE_MAX
 
 #include "printing.h"
@@ -19,10 +20,37 @@
 #include "set.h"
 #include "ast.h"
 
+typedef struct doc_info {
+    char* doc_name;
+    size_t n_terms;
+} doc_info_t;
+
+typedef struct term_info {
+    doc_info_t* doc;
+    size_t frequency;
+} term_info_t;
+
 struct index {
     map_t* terms;
-    size_t number_of_documents_indexed;
+    set_t* documented_paths;
 };
+
+int compare_doc_info_name(doc_info_t* a, doc_info_t* b) {
+    if (!a || !b) return -1;
+
+    return strcmp(a->doc_name, b->doc_name);
+}
+
+int compare_term_info_name(term_info_t* a, term_info_t* b) {
+    if (!a || !b) return -1;
+    if (!a->doc || !b->doc) return -1;
+
+    return strcmp(a->doc->doc_name, b->doc->doc_name);
+}
+
+void destroy_term_info(term_info_t* info) {
+    free(info);
+}
 
 /**
  * You may utilize this for lists of query results, or write your own comparison function.
@@ -78,20 +106,26 @@ index_t *index_create() {
      * TODO: Allocate, initialize and set up nescessary structures
      */
     index->terms = map_create((cmp_fn) strcmp, hash_string_fnv1a64);
-    index->number_of_documents_indexed = 0;
+    index->documented_paths = set_create((cmp_fn) compare_doc_info_name);
 
     return index;
 }
 
-void free_mapset(void* set) {
-    set_destroy(set, NULL);
+void free_mapset(set_t* set) {
+    set_destroy(set, (free_fn)destroy_term_info);
+}
+
+void free_doc_info(doc_info_t* doc) {
+    free(doc->doc_name);
+    free(doc);
 }
 
 void index_destroy(index_t *index) {
     // during development, you can use the following macro to silence "unused variable" errors.
     UNUSED(index);
 
-    map_destroy(index->terms, free, free_mapset);
+    map_destroy(index->terms, free, (free_fn)free_mapset);
+    set_destroy(index->documented_paths, (free_fn)free_doc_info);
     free(index);
     index = NULL;
 }
@@ -103,34 +137,64 @@ int index_document(index_t *index, char *doc_name, list_t *terms) {
      * Note: doc_name and the list of terms is now owned by the index. See the docstring.
      */
 
-    // TODO: Check if document has been documented previously
-    
+    // Check if document has been documented previously
+    doc_info_t doc;
+    doc.doc_name = doc_name;
+    if (set_get(index->documented_paths, &doc)) {
+        pr_debug("%s already documented\n", doc_name);
+        return 0;
+    }
+    doc_info_t* doc_info = malloc(sizeof(doc_info_t));
+    doc_info->doc_name = doc_name;
+    doc_info->n_terms = list_length(terms);
+    set_insert(index->documented_paths, doc_info);
     
     list_iter_t* term_iter = list_createiter(terms);
     if (term_iter == NULL)
         return -1;
     
-    index->number_of_documents_indexed++;
     char* term;
     while ((term = list_next(term_iter))) {
         entry_t* entry = map_get(index->terms, term);
-        set_t* appearance_set = NULL;
         if (entry == NULL) {
-            appearance_set = set_create((cmp_fn) strcmp);
-            if (appearance_set == NULL) {
+            set_t* appearances = set_create((cmp_fn) compare_term_info_name);
+            if (appearances == NULL) {
                 list_destroyiter(term_iter);
                 return -1;
             }
-            
-            set_insert(appearance_set, doc_name);
+
             char* term_cpy = malloc(strlen(term)+1);
-            strcpy(term_cpy, term);
-            map_insert(index->terms, term_cpy, appearance_set);
+            strcpy(term_cpy, term); // copy term to make `free` easier
+            
+            term_info_t* term_info = malloc(sizeof(term_info_t));
+            if (term_info == NULL) {
+                pr_error("Could not allocate memory for term_info\n");
+                return -1;
+            }
+            term_info->doc = doc_info;
+            term_info->frequency = 1;
+
+            set_insert(appearances, term_info);
+            map_insert(index->terms, term_cpy, appearances);
             continue;
         }
-        // If term is already in the map:
-        appearance_set = entry->val;
-        set_insert(appearance_set, doc_name);
+        
+        set_t* appearances = entry->val;
+        term_info_t search;
+        search.doc = doc_info;
+        term_info_t* term_info = set_get(appearances, &search);
+        // When term is in map, but not registered to the current document:
+        if (term_info == NULL) {
+            term_info = malloc(sizeof(term_info_t));
+            term_info->doc = doc_info;
+            term_info->frequency = 1;
+            set_insert(appearances, term_info);
+            pr_debug("term %s added in %s\n", term, doc_name);
+            continue;
+        }
+
+        pr_debug("%s appears %zu times in %s\n", term, term_info->frequency, doc_name);
+        term_info->frequency += 1;
     }
     list_destroyiter(term_iter);
     list_destroy(terms, free);
@@ -198,17 +262,23 @@ list_t *index_query(index_t *index, list_t *query_tokens, char *errmsg) {
     // Fetch results from map
     set_t* evaluated_set = evaluate(index, ast->root);
 
-
     // Construct a list of `query_result_t` objects
-    list_t* results = list_create((cmp_fn) strcmp);
+    list_t* results = list_create((cmp_fn) compare_results_by_score);
     set_iter_t* set_iter = set_createiter(evaluated_set);
-    char* cur_doc = NULL;
+    term_info_t* cur_doc = NULL;
     while ((cur_doc = set_next(set_iter))) {
         query_result_t* result = malloc(sizeof(query_result_t));
-        result->doc_name = cur_doc;
-        result->score = 0;
+        result->doc_name = cur_doc->doc->doc_name;
+        double tf = (double)cur_doc->frequency / (double)cur_doc->doc->n_terms;
+        double idf = log(
+            (double)set_length(index->documented_paths) / (double)set_length(evaluated_set)
+        );
+        double tf_idf = tf * idf;
+        pr_debug("%f x %f = %f\n", tf, idf, tf_idf);
+        result->score = tf_idf;
         list_addlast(results, result);
     }
+    list_sort(results);
 
     // Clean up
     set_destroyiter(set_iter);
@@ -219,6 +289,6 @@ list_t *index_query(index_t *index, list_t *query_tokens, char *errmsg) {
 }
 
 void index_stat(index_t *index, size_t *n_docs, size_t *n_terms) {
-    *n_docs = index->number_of_documents_indexed;
+    *n_docs = set_length(index->documented_paths);
     *n_terms = map_length(index->terms);
 }

@@ -70,6 +70,7 @@ node_t* parse_term(list_iter_t* iter, char* errmsg);
 uint8_t ast_parse(ast_t* ast, list_t* query_tokens, char* errmsg) {
     if (list_length(query_tokens) == 1) {
         char* word = list_popfirst(query_tokens);
+        list_addfirst(query_tokens, word); // add it back immediatly so memory is freed when `list_destroy` is called later
         if (is_operator(word)) {
             pr_error("Not a valid query\n");
             snprintf(errmsg, LINE_MAX, "Expected word to search for");
