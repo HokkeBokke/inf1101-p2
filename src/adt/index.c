@@ -25,10 +25,10 @@ typedef struct doc_info {
     size_t n_terms;
 } doc_info_t;
 
-typedef struct term_info {
+typedef struct posting {
     doc_info_t* doc;
     size_t frequency;
-} term_info_t;
+} posting_t;
 
 struct index {
     map_t* terms;
@@ -41,14 +41,14 @@ int compare_doc_info_name(doc_info_t* a, doc_info_t* b) {
     return strcmp(a->doc_name, b->doc_name);
 }
 
-int compare_term_info_name(term_info_t* a, term_info_t* b) {
+int compare_term_info_name(posting_t* a, posting_t* b) {
     if (!a || !b) return -1;
     if (!a->doc || !b->doc) return -1;
 
     return strcmp(a->doc->doc_name, b->doc->doc_name);
 }
 
-void destroy_term_info(term_info_t* info) {
+void destroy_term_info(posting_t* info) {
     free(info);
 }
 
@@ -166,35 +166,35 @@ int index_document(index_t *index, char *doc_name, list_t *terms) {
             char* term_cpy = malloc(strlen(term)+1);
             strcpy(term_cpy, term); // copy term to make `free` easier
             
-            term_info_t* term_info = malloc(sizeof(term_info_t));
-            if (term_info == NULL) {
-                pr_error("Could not allocate memory for term_info\n");
+            posting_t* posting = malloc(sizeof(posting_t));
+            if (posting == NULL) {
+                pr_error("Could not allocate memory for posting\n");
                 return -1;
             }
-            term_info->doc = doc_info;
-            term_info->frequency = 1;
+            posting->doc = doc_info;
+            posting->frequency = 1;
 
-            set_insert(appearances, term_info);
+            set_insert(appearances, posting);
             map_insert(index->terms, term_cpy, appearances);
             continue;
         }
         
         set_t* appearances = entry->val;
-        term_info_t search;
+        posting_t search;
         search.doc = doc_info;
-        term_info_t* term_info = set_get(appearances, &search);
+        posting_t* posting = set_get(appearances, &search);
         // When term is in map, but not registered to the current document:
-        if (term_info == NULL) {
-            term_info = malloc(sizeof(term_info_t));
-            term_info->doc = doc_info;
-            term_info->frequency = 1;
-            set_insert(appearances, term_info);
+        if (posting == NULL) {
+            posting = malloc(sizeof(posting_t));
+            posting->doc = doc_info;
+            posting->frequency = 1;
+            set_insert(appearances, posting);
             pr_debug("term %s added in %s\n", term, doc_name);
             continue;
         }
 
-        pr_debug("%s appears %zu times in %s\n", term, term_info->frequency, doc_name);
-        term_info->frequency += 1;
+        pr_debug("%s appears %zu times in %s\n", term, posting->frequency, doc_name);
+        posting->frequency += 1;
     }
     list_destroyiter(term_iter);
     list_destroy(terms, free);
@@ -265,7 +265,7 @@ list_t *index_query(index_t *index, list_t *query_tokens, char *errmsg) {
     // Construct a list of `query_result_t` objects
     list_t* results = list_create((cmp_fn) compare_results_by_score);
     set_iter_t* set_iter = set_createiter(evaluated_set);
-    term_info_t* cur_doc = NULL;
+    posting_t* cur_doc = NULL;
     while ((cur_doc = set_next(set_iter))) {
         query_result_t* result = malloc(sizeof(query_result_t));
         result->doc_name = cur_doc->doc->doc_name;

@@ -718,8 +718,10 @@ int main(int argc, char **argv) {
         /* continue to cleanup */
     }
 
-    pr_debug("Destroying index\n");
-    index_destroy(idx);
+    if (idx) {
+        pr_debug("Destroying index\n");
+        index_destroy(idx);
+    }
     list_destroy(fpaths, free);
 
     list_destroy(piped_input, free); // empty list if interpreting went ok
